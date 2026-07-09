@@ -1,0 +1,21 @@
+[Unit]
+Description=Mebel Sexi Detektor
+After=network.target
+# Internet tayyorlashini kutish
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/home/YOUR_USERNAME/furniture_guard
+ExecStart=/usr/bin/python3 detector.py
+# Har doim qayta ishga tushirish (xato bo'lsa ham, svet uchsa ham)
+Restart=always
+RestartSec=10
+# Log
+StandardOutput=append:/home/YOUR_USERNAME/furniture_guard/detector.log
+StandardError=append:/home/YOUR_USERNAME/furniture_guard/detector.log
+
+[Install]
+WantedBy=multi-user.target
