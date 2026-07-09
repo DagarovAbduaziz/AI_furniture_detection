@@ -8,14 +8,14 @@ After=network-online.target
 [Service]
 Type=simple
 User=nothing
-WorkingDirectory=/home/nothing/furniture_guard
+WorkingDirectory=/home/nothing/AI_furniture_detection/furniture_guard
 ExecStart=/usr/bin/python3 detector.py
 # Har doim qayta ishga tushirish (xato bo'lsa ham, svet uchsa ham)
 Restart=always
 RestartSec=10
 # Log
-StandardOutput=append:/home/nothing/furniture_guard/detector.log
-StandardError=append:/home/nothing/furniture_guard/detector.log
+StandardOutput=append:/home/nothing/AI_furniture_detection/furniture_guard/detector.log
+StandardError=append:/home/nothing/AI_furniture_detection/furniture_guard/detector.log
 
 [Install]
 WantedBy=multi-user.target
