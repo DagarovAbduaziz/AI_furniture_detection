@@ -1,18 +1,14 @@
 """
-Mebel Sexi Chiqish Nazorat Tizimi — Production versiya
-=======================================================
-✅ Internet yo'q bo'lsa rasmlarni saqlaydi, keyin yuboradi
-✅ Kamera uzilib qolsa avtomatik qayta ulanadi
-✅ Svet o'chib yonsa avtomatik ishga tushadi (systemd bilan)
-✅ Barcha xatolar logga yoziladi
-
-Ishga tushirish:
-    python detector.py
+Mebel Sexi Chiqish Nazorat Tizimi
+===================================
+✅ Internet yo'qda rasmlarni saqlaydi, kelganda yuboradi
+✅ Barcha xatolar detector.log ga yoziladi
+✅ Serverda ekransiz ishlaydi (show_window = False)
 """
 
 import cv2
-import time
 import json
+import time
 import requests
 import threading
 import logging
@@ -25,148 +21,120 @@ try:
     YOLO_AVAILABLE = True
 except ImportError:
     YOLO_AVAILABLE = False
+    print("⚠️  ultralytics o'rnatilmagan. pip install ultralytics")
+
 
 # ══════════════════════════════════════════════
 #  SOZLAMALAR
 # ══════════════════════════════════════════════
 CONFIG = {
-    # Kamera
-    "camera_source": "rtsp://admin:1FaSa1988@192.168.8.5:554/Streaming/Channels/101",
+    "camera_source": 'rtsp://admin:1FaSa1988@192.168.8.5:554/Streaming/Channels/101',
 
-    # Telegram
     "telegram_token":   "8794822676:AAFWS7qDJ1Kj4QbqESxSE60hJhcSJ5EPWKc",
     "telegram_chat_id": "8441789662",
 
-    # Model — o'z modelingiz bo'lsa shu yo'lni yozing
-    "model_path": "mebel_model.pt",
-
-    # Chiqish zonasi — None = avtomatik (o'ng yarmi)
     "exit_zone": (8, 485, 1125, 1438),
 
     "furniture_classes": {
-    0 : "divan",
-    1 : 'kreslo',
-    2 : 'pufik',
-    3 : 'burchak'
+        0: "divan",
+        1: "kreslo",
+        2: "pufik",
+        3: "burchak",
     },
 
-    # Sezgirlik
-    "confidence_threshold": 0.45,
-
-    # Bir xil obekt uchun qayta xabar yubormaslik (soniya)
+    "confidence_threshold":   0.45,
     "alert_cooldown_seconds": 30,
+    "frame_delay_ms":         60,
 
-    # Kadrlar orasidagi kutish (ms)
-    "frame_delay_ms": 100,
+    "save_alert_images": True,
+    "save_folder":       "alerts",
 
-    # Offline navbat sozlamalari
-    "offline_save_dir":    "offline_queue",   # internet yo'qda saqlanadigan joy
-    "max_offline_queue":   200,               # maksimal saqlash (rasm soni)
-    "retry_interval_sec":  60,                # internetni tekshirish oralig'i (soniya)
+    # Offline navbat
+    "offline_queue_dir": "offline_queue",
+    "offline_max_count": 200,
+    "offline_retry_sec": 60,
 
-    # Log fayli
-    "log_file": "detector.log",
-
-    # Ekran ko'rsatish (server da False qiling)
-    "show_window": True,
+    "log_file":    "detector.log",
+    "show_window": True,   # serverda False qiling
 }
+
 
 # ══════════════════════════════════════════════
 #  LOGGING
 # ══════════════════════════════════════════════
-def setup_logging(log_file: str):
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(),
-        ]
-    )
-
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(CONFIG["log_file"], encoding="utf-8"),
+        logging.StreamHandler(),
+    ]
+)
 log = logging.getLogger(__name__)
 
+
 # ══════════════════════════════════════════════
-#  OFFLINE NAVBAT — internet yo'qda saqlash
+#  OFFLINE NAVBAT
 # ══════════════════════════════════════════════
 class OfflineQueue:
-    """
-    Internet yo'q bo'lganda rasmlarni diskka saqlaydi.
-    Internet kelganda avtomatik yuboradi.
-    """
-    def __init__(self, save_dir: str, max_size: int):
-        self.dir = Path(save_dir)
+    def __init__(self, folder: str, max_count: int):
+        self.dir = Path(folder)
         self.dir.mkdir(exist_ok=True)
-        self.max_size = max_size
+        self.max_count = max_count
         self._lock = threading.Lock()
 
     def push(self, img_bytes: bytes, caption: str):
-        """Rasmni navbatga qo'shish"""
         with self._lock:
-            # Navbat to'lib qolmasin
             existing = sorted(self.dir.glob("*.jpg"))
-            if len(existing) >= self.max_size:
-                # Eng eskisini o'chirish
-                existing[0].unlink(missing_ok=True)
-                meta = existing[0].with_suffix(".json")
-                meta.unlink(missing_ok=True)
-                log.warning(f"Offline navbat to'ldi, eng eski o'chirildi")
-
+            while len(existing) >= self.max_count:
+                old = existing.pop(0)
+                old.unlink(missing_ok=True)
+                old.with_suffix(".json").unlink(missing_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            img_path  = self.dir / f"{ts}.jpg"
-            meta_path = self.dir / f"{ts}.json"
-
-            img_path.write_bytes(img_bytes)
-            meta_path.write_text(
-                json.dumps({"caption": caption, "time": ts}, ensure_ascii=False),
-                encoding="utf-8"
+            self.dir.joinpath(f"{ts}.jpg").write_bytes(img_bytes)
+            self.dir.joinpath(f"{ts}.json").write_text(
+                json.dumps({"caption": caption}, ensure_ascii=False), encoding="utf-8"
             )
-            log.info(f"📥 Offline saqlandi: {img_path.name}")
+            log.info(f"📥 Offline saqlandi ({self.count()} ta navbatda)")
 
-    def pending(self) -> list[tuple[Path, Path]]:
-        """Yuborilmagan rasmlar ro'yxati"""
+    def pop_all(self):
         with self._lock:
-            pairs = []
-            for img in sorted(self.dir.glob("*.jpg")):
-                meta = img.with_suffix(".json")
-                if meta.exists():
-                    pairs.append((img, meta))
-            return pairs
+            result = []
+            for img_path in sorted(self.dir.glob("*.jpg")):
+                meta_path = img_path.with_suffix(".json")
+                if not meta_path.exists():
+                    continue
+                try:
+                    img_bytes = img_path.read_bytes()
+                    meta      = json.loads(meta_path.read_text(encoding="utf-8"))
+                    result.append((img_bytes, meta.get("caption", ""), img_path))
+                except Exception:
+                    pass
+            return result
 
     def remove(self, img_path: Path):
-        """Muvaffaqiyatli yuborilgandan keyin o'chirish"""
         with self._lock:
             img_path.unlink(missing_ok=True)
             img_path.with_suffix(".json").unlink(missing_ok=True)
 
     def count(self) -> int:
-        with self._lock:
-            return len(list(self.dir.glob("*.jpg")))
+        return len(list(self.dir.glob("*.jpg")))
 
 
 # ══════════════════════════════════════════════
 #  TELEGRAM
 # ══════════════════════════════════════════════
 class TelegramAlert:
-    def __init__(self, token: str, chat_id: str, queue: OfflineQueue, retry_interval: int):
+    def __init__(self, token: str, chat_id: str, queue: OfflineQueue, retry_sec: int):
         self.token    = token
         self.chat_id  = chat_id
+        self.base_url = f"https://api.telegram.org/bot{token}"
         self.queue    = queue
-        self.base_url = f"https://api.telegram.org/bot8794822676:AAFWS7qDJ1Kj4QbqESxSE60hJhcSJ5EPWKc"
         self._last_alerts: dict[int, float] = {}
-        self._lock    = threading.Lock()
-        self._online  = False
+        self._lock = threading.Lock()
+        threading.Thread(target=self._retry_loop, args=(retry_sec,), daemon=True).start()
 
-        # Orqa fonda navbatni yuboruvchi thread
-        t = threading.Thread(target=self._retry_loop, args=(retry_interval,), daemon=True)
-        t.start()
-
-    def _is_configured(self) -> bool:
-        return (self.token   != "8794822676:AAFWS7qDJ1Kj4QbqESxSE60hJhcSJ5EPWKc" and
-                self.chat_id != "8441789662")
-
-    def _check_internet(self) -> bool:
-        """Internetni tekshirish"""
+    def _internet_ok(self) -> bool:
         try:
             requests.get("https://api.telegram.org", timeout=5)
             return True
@@ -174,10 +142,6 @@ class TelegramAlert:
             return False
 
     def _send_photo_now(self, img_bytes: bytes, caption: str) -> bool:
-        """To'g'ridan Telegramga yuborish"""
-        if not self._is_configured():
-            log.info(f"[DEMO] {caption[:60]}")
-            return True
         try:
             resp = requests.post(
                 f"{self.base_url}/sendPhoto",
@@ -185,98 +149,65 @@ class TelegramAlert:
                 files={"photo": ("alert.jpg", img_bytes, "image/jpeg")},
                 timeout=15
             )
-            return resp.status_code == 200
+            if resp.status_code == 200:
+                log.info("✅ Telegram xabari yuborildi")
+                return True
+            else:
+                log.warning(f"❌ Telegram xato: {resp.text[:100]}")
+                return False
         except Exception as e:
-            log.warning(f"Telegram xato: {e}")
+            log.warning(f"❌ Telegram ulanish xatosi: {e}")
             return False
 
-    def _retry_loop(self, interval: int):
-        """
-        Orqa fonda doim ishlaydi.
-        Internet kelganda offline navbatdagi rasmlarni yuboradi.
-        """
+    def _retry_loop(self, retry_sec: int):
         while True:
-            time.sleep(interval)
-            pending = self.queue.pending()
+            time.sleep(retry_sec)
+            pending = self.queue.pop_all()
             if not pending:
                 continue
-
-            if not self._check_internet():
+            if not self._internet_ok():
                 log.info(f"📵 Internet yo'q — {len(pending)} ta rasm kutmoqda")
-                self._online = False
                 continue
-
-            self._online = True
-            log.info(f"🌐 Internet bor — {len(pending)} ta navbatdagi rasm yuborilmoqda")
-
-            for img_path, meta_path in pending:
-                try:
-                    meta      = json.loads(meta_path.read_text(encoding="utf-8"))
-                    img_bytes = img_path.read_bytes()
-                    caption   = meta.get("caption", "Mebel ogohlantirish")
-                    caption  += f"\n⏰ <i>Kechikib yuborildi: {meta.get('time','')}</i>"
-
-                    if self._send_photo_now(img_bytes, caption):
-                        self.queue.remove(img_path)
-                        log.info(f"✅ Navbatdan yuborildi: {img_path.name}")
-                        time.sleep(1)   # Telegram rate limit
-                    else:
-                        log.warning(f"❌ Yuborishda xato: {img_path.name}")
-                        break
-                except Exception as e:
-                    log.error(f"Navbat xatosi: {e}")
+            log.info(f"🌐 {len(pending)} ta navbatdagi rasm yuborilmoqda...")
+            for img_bytes, caption, img_path in pending:
+                caption += "\n⏰ <i>Kechikib yuborildi</i>"
+                if self._send_photo_now(img_bytes, caption):
+                    self.queue.remove(img_path)
+                    time.sleep(1)
+                else:
                     break
 
-    def can_send(self, obj_id: int, cooldown: int) -> bool:
+    def can_send_alert(self, object_id: int, cooldown: int) -> bool:
         with self._lock:
             now  = time.time()
-            last = self._last_alerts.get(obj_id, 0)
+            last = self._last_alerts.get(object_id, 0)
             if now - last >= cooldown:
-                self._last_alerts[obj_id] = now
+                self._last_alerts[object_id] = now
                 return True
             return False
 
-    def send_alert(self, img_bytes: bytes, caption: str):
-        """
-        Internet bo'lsa darhol yuboradi.
-        Yo'q bo'lsa offline navbatga qo'yadi.
-        """
-        if not self._is_configured():
-            log.info(f"[DEMO] {caption[:60]}")
-            return
-
-        # Avval internet bor yoki yo'qligini tekshiramiz
-        if self._check_internet():
-            self._online = True
-            ok = self._send_photo_now(img_bytes, caption)
-            if ok:
-                log.info("✅ Telegram xabari yuborildi")
+    def send_photo_alert(self, img_bytes: bytes, caption: str):
+        if self._internet_ok():
+            if self._send_photo_now(img_bytes, caption):
                 return
-            # Yuborishda xato — navbatga
-            log.warning("Yuborishda xato — offline navbatga qo'shildi")
-
-        # Internet yo'q yoki xato — saqlash
-        self._online = False
+        log.info("📵 Internet yo'q — navbatga qo'shildi")
         self.queue.push(img_bytes, caption)
-        log.info(f"📵 Internet yo'q — navbatda: {self.queue.count()} ta rasm")
 
-    def send_text(self, text: str):
-        if not self._is_configured():
-            return
+    def send_text(self, message: str):
         try:
             requests.post(
                 f"{self.base_url}/sendMessage",
-                data={"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"},
+                data={"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"},
                 timeout=10
             )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"send_text xato: {e}")
 
 
 # ══════════════════════════════════════════════
-#  YORDAMCHI FUNKSIYALAR
+#  CHIQISH ZONASI
 # ══════════════════════════════════════════════
-def box_in_exit_zone(box_xyxy, zone_xyxy, threshold=0.3) -> bool:
+def box_in_exit_zone(box_xyxy, zone_xyxy, overlap_threshold=0.3) -> bool:
     bx1, by1, bx2, by2 = box_xyxy
     zx1, zy1, zx2, zy2 = zone_xyxy
     ix1, iy1 = max(bx1, zx1), max(by1, zy1)
@@ -284,8 +215,10 @@ def box_in_exit_zone(box_xyxy, zone_xyxy, threshold=0.3) -> bool:
     if ix2 <= ix1 or iy2 <= iy1:
         return False
     intersection = (ix2 - ix1) * (iy2 - iy1)
-    box_area = max((bx2-bx1) * (by2-by1), 1)
-    return (intersection / box_area) >= threshold
+    box_area = (bx2 - bx1) * (by2 - by1)
+    if box_area == 0:
+        return False
+    return (intersection / box_area) >= overlap_threshold
 
 
 # ══════════════════════════════════════════════
@@ -294,49 +227,49 @@ def box_in_exit_zone(box_xyxy, zone_xyxy, threshold=0.3) -> bool:
 class FurnitureGuard:
     def __init__(self, config: dict):
         self.cfg = config
-
-        # Offline navbat va Telegram
-        self.queue = OfflineQueue(
-            config["offline_save_dir"],
-            config["max_offline_queue"]
-        )
+        self.queue = OfflineQueue(config["offline_queue_dir"], config["offline_max_count"])
         self.telegram = TelegramAlert(
-            config["telegram_token"],
-            config["telegram_chat_id"],
-            self.queue,
-            config["retry_interval_sec"]
+            config["telegram_token"], config["telegram_chat_id"],
+            self.queue, config["offline_retry_sec"]
         )
+        self.alert_log: list[dict] = []
+        Path(config["save_folder"]).mkdir(exist_ok=True)
 
-        Path("alerts").mkdir(exist_ok=True)
-
-        # Model yuklash
-        model_path = Path(config["model_path"])
+        log.info("🔄 Model yuklanmoqda...")
         if YOLO_AVAILABLE:
-            self.model = YOLO("mebel_model.pt")  # nano — eng tez, kichik
-            print("✅ Model yuklandi")
-            log.info(f"✅ Sinf nomlari: {list(self.model.names.values())}")
+            self.model = YOLO("mebel_model.pt")
+            log.info(f"✅ Model yuklandi: {list(self.model.names.values())}")
         else:
-            log.error("ultralytics o'rnatilmagan")
             self.model = None
 
-    def _open_camera(self, src):
-        cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(src)
-        if not cap.isOpened():
-            return None, None
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        frame = None
-        for _ in range(15):
-            ret, f = cap.read()
-            if ret and f is not None:
-                frame = f
-                break
-            time.sleep(0.1)
-        if frame is None:
-            cap.release()
-            return None, None
-        return cap, frame
+    def draw_ui(self, frame, detections: list):
+        h, w = frame.shape[:2]
+        zone = self.cfg["exit_zone"]
+        cv2.rectangle(frame, (zone[0], zone[1]), (zone[2], zone[3]), (0, 100, 255), 2)
+        cv2.putText(frame, "CHIQISH ZONASI", (zone[0] + 5, zone[1] + 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 100, 255), 1)
+        for det in detections:
+            x1, y1, x2, y2 = [int(v) for v in det["box"]]
+            in_zone   = det["in_exit_zone"]
+            color     = (0, 50, 220) if in_zone else (50, 200, 50)
+            thickness = 3 if in_zone else 2
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+            tag = f"{det['label']} {det['confidence']:.0%}"
+            if in_zone:
+                tag += " ⚠ CHIQYAPTI!"
+            (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+            cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw + 4, y1), color, -1)
+            cv2.putText(frame, tag, (x1 + 2, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+        ts = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+        cv2.putText(frame, ts, (10, h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        pending = self.queue.count()
+        status  = f"📵 OFFLINE ({pending} navbatda)" if pending > 0 else "🌐 ONLINE"
+        s_color = (0, 100, 255) if pending > 0 else (0, 200, 80)
+        cv2.putText(frame, status, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, s_color, 1)
+        cv2.putText(frame, f"Topilgan mebel: {len(detections)}", (10, 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+        return frame
 
     def process_frame(self, frame) -> list:
         if self.model is None:
@@ -353,154 +286,127 @@ class FurnitureGuard:
                 cls_id = int(box.cls[0])
                 if cls_id not in self.cfg["furniture_classes"]:
                     continue
-
-                xyxy = box.xyxy[0].tolist()
-                conf = float(box.conf[0])
+                xyxy    = box.xyxy[0].tolist()
+                conf    = float(box.conf[0])
                 in_zone = box_in_exit_zone(xyxy, self.cfg["exit_zone"])
-
                 detections.append({
-                    "label": self.cfg["furniture_classes"][cls_id],
-                    "class_id": cls_id,
-                    "confidence": conf,
-                    "box": xyxy,
+                    "label":        self.cfg["furniture_classes"][cls_id],
+                    "class_id":     cls_id,
+                    "confidence":   conf,
+                    "box":          xyxy,
                     "in_exit_zone": in_zone,
                 })
         return detections
 
-    def draw_ui(self, frame, detections):
-        h, w = frame.shape[:2]
-        zone = self.cfg["exit_zone"]
-
-        cv2.rectangle(frame, (zone[0], zone[1]), (zone[2], zone[3]), (0, 100, 255), 2)
-        cv2.putText(frame, "CHIQISH ZONASI", (zone[0]+5, zone[1]+20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 100, 255), 1)
-
-        for det in detections:
-            x1, y1, x2, y2 = [int(v) for v in det["box"]]
-            color = (0, 50, 220) if det["in_exit_zone"] else (50, 200, 50)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            tag = f"{det['label']} {det['confidence']:.0%}"
-            if det["in_exit_zone"]:
-                tag += " ⚠ CHIQYAPTI"
-            cv2.putText(frame, tag, (x1, y1-5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1)
-
-        # Holat paneli
-        online  = self.telegram._online
-        pending = self.queue.count()
-        ts      = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
-
-        status_color = (0, 200, 80) if online else (0, 100, 255)
-        status_txt   = "🌐 ONLINE" if online else f"📵 OFFLINE ({pending} navbatda)"
-        cv2.putText(frame, ts,         (10, h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200,200,200), 1)
-        cv2.putText(frame, status_txt, (10, h-10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, status_color,  1)
-        cv2.putText(frame, f"Topilgan: {len(detections)}", (10, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
-        return frame
-
-    def handle_alerts(self, frame, detections):
+    def handle_alerts(self, frame, detections: list):
         for det in detections:
             if not det["in_exit_zone"]:
                 continue
-            if not self.telegram.can_send(det["class_id"], self.cfg["alert_cooldown_seconds"]):
+            if not self.telegram.can_send_alert(det["class_id"], self.cfg["alert_cooldown_seconds"]):
                 continue
-
             now    = datetime.now()
             ts_str = now.strftime("%Y-%m-%d %H:%M:%S")
             caption = (
                 f"🚨 <b>MEBEL SEXI OGOHLANTIRISH!</b>\n\n"
                 f"📦 Mebel: <b>{det['label']}</b>\n"
-                f"📊 Ishonch: {det['confidence']:.0%}\n"
+                f"📊 Ishonch darajasi: {det['confidence']:.0%}\n"
+                f"📍 Joyi: Chiqish zonasi\n"
                 f"🕐 Vaqt: {ts_str}"
             )
-
-            _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            img_bytes = buf.tobytes()
-
-            # Diskka ham saqlash
-            fname = now.strftime(f"alerts/%Y%m%d_%H%M%S_{det['label']}.jpg")
-            Path(fname).write_bytes(img_bytes)
-
-            # Yuborish yoki navbatga qo'yish
+            _, img_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            img_bytes  = img_buf.tobytes()
+            if self.cfg["save_alert_images"]:
+                fname = now.strftime(
+                    f"{self.cfg['save_folder']}/%Y%m%d_%H%M%S_{det['label'].replace('/', '_')}.jpg"
+                )
+                Path(fname).write_bytes(img_bytes)
             threading.Thread(
-                target=self.telegram.send_alert,
-                args=(img_bytes, caption),
-                daemon=True
+                target=self.telegram.send_photo_alert,
+                args=(img_bytes, caption), daemon=True
             ).start()
-
+            self.alert_log.append({"time": ts_str, "furniture": det["label"], "confidence": det["confidence"]})
             log.info(f"🚨 OGOHLANTIRISH: {det['label']} chiqish zonasida!")
+
+    def _open_camera(self, src):
+        cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(src)
+        if not cap.isOpened():
+            return None, None
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        frame = None
+        for _ in range(10):
+            ret, f = cap.read()
+            if ret and f is not None:
+                frame = f
+                break
+            time.sleep(0.1)
+        if frame is None:
+            cap.release()
+            return None, None
+        return cap, frame
 
     def run(self):
         src      = self.cfg["camera_source"]
         show_win = self.cfg["show_window"]
-        win_name = "Mebel Nazorat  |  q=chiqish"
+        win_name = "Mebel Nazorat Tizimi  |  q = chiqish"
+        detections        = []
+        frame_count       = 0
+        fps_history       = deque(maxlen=30)
+        t_prev            = time.time()
+        consecutive_fails = 0
+        MAX_FAILS         = 5
 
         log.info(f"🔄 Kameraga ulanmoqda: {src}")
-
-        # Ulanish urinishlari
-        cap, frame = None, None
-        for attempt in range(1, 6):
-            cap, frame = self._open_camera(src)
-            if cap is not None:
-                break
-            log.warning(f"Ulanib bo'lmadi ({attempt}/5), 5s kutilmoqda...")
-            time.sleep(5)
-
+        cap, frame = self._open_camera(src)
         if cap is None:
             log.error(f"❌ Kameraga ulanib bo'lmadi: {src}")
             return
 
         h, w = frame.shape[:2]
+        fps  = cap.get(cv2.CAP_PROP_FPS) or 15
 
         if self.cfg["exit_zone"] is None:
             self.cfg["exit_zone"] = (w // 2, 0, w, h)
-            log.info(f"exit_zone avtomatik: {self.cfg['exit_zone']}")
 
         if show_win:
             cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(win_name, w, h)
 
-        log.info(f"🎥 Kamera: {w}x{h}")
+        log.info(f"🎥 Kamera: {w}x{h} @ {fps:.0f}FPS")
         log.info(f"🚪 Chiqish zonasi: {self.cfg['exit_zone']}")
-
         self.telegram.send_text(
             "🟢 <b>Mebel nazorat tizimi ishga tushdi</b>\n"
+            f"Kamera: {w}x{h}\n"
             f"Vaqt: {datetime.now().strftime('%H:%M:%S')}"
         )
-
-        frame_count      = 0
-        fps_history      = deque(maxlen=30)
-        t_prev           = time.time()
-        detections       = []
-        consecutive_fail = 0
-        MAX_FAIL         = 5
-
         log.info("▶  Kuzatish boshlandi")
 
         while True:
             ret, new_frame = cap.read()
-
             if not ret or new_frame is None:
-                consecutive_fail += 1
-                if consecutive_fail >= MAX_FAIL:
-                    log.warning(f"⚠️  {consecutive_fail} ta kadr o'qilmadi — qayta ulanmoqda...")
+                consecutive_fails += 1
+                if consecutive_fails < MAX_FAILS:
+                    time.sleep(0.05)
+                else:
+                    log.warning(f"⚠️  Qayta ulanmoqda...")
                     cap.release()
-                    time.sleep(3)
+                    time.sleep(2)
                     cap, recovered = self._open_camera(src)
+                    if cap is None:
+                        time.sleep(5)
+                        cap, recovered = self._open_camera(src)
                     if cap is not None and recovered is not None:
                         frame = recovered
-                        consecutive_fail = 0
+                        consecutive_fails = 0
                         log.info("✅ Kamera qayta ulandi")
                     else:
-                        log.warning("Kamera hali ulanmadi, 5s kutilmoqda...")
-                        time.sleep(5)
-                time.sleep(0.05)
+                        time.sleep(3)
             else:
                 frame = new_frame
-                consecutive_fail = 0
+                consecutive_fails = 0
 
             frame_count += 1
-
             if frame_count % 3 == 0:
                 detections = self.process_frame(frame)
                 self.handle_alerts(frame, detections)
@@ -511,9 +417,11 @@ class FurnitureGuard:
             if show_win:
                 display = self.draw_ui(frame.copy(), detections)
                 if fps_history:
-                    avg_fps = sum(fps_history) / len(fps_history)
-                    cv2.putText(display, f"FPS: {avg_fps:.1f}", (10, 40),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 100), 1)
+                    avg_fps      = sum(fps_history) / len(fps_history)
+                    status_color = (0, 220, 80) if consecutive_fails == 0 else (0, 100, 255)
+                    status_txt   = "● JONLI" if consecutive_fails == 0 else f"● XATO ({consecutive_fails})"
+                    cv2.putText(display, f"FPS: {avg_fps:.1f}  {status_txt}", (10, 40),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, status_color, 1)
                 cv2.imshow(win_name, display)
                 key = cv2.waitKey(self.cfg["frame_delay_ms"]) & 0xFF
                 if key == ord('q'):
@@ -528,21 +436,14 @@ class FurnitureGuard:
         cap.release()
         if show_win:
             cv2.destroyAllWindows()
-
+        log.info(f"📊 Jami ogohlantirishlar: {len(self.alert_log)}")
         self.telegram.send_text(
             f"🔴 <b>Tizim to'xtatildi</b>\n"
+            f"Jami ogohlantirishlar: {len(self.alert_log)}\n"
             f"Vaqt: {datetime.now().strftime('%H:%M:%S')}"
         )
-        log.info("Tizim to'xtatildi")
 
 
-# ══════════════════════════════════════════════
-#  ISHGA TUSHIRISH
-# ══════════════════════════════════════════════
 if __name__ == "__main__":
-    setup_logging(CONFIG["log_file"])
-    log.info("=" * 50)
-    log.info("  MEBEL NAZORAT TIZIMI ISHGA TUSHDI")
-    log.info("=" * 50)
     guard = FurnitureGuard(CONFIG)
     guard.run()
