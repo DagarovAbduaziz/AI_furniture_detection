@@ -42,9 +42,9 @@ CONFIG = {
         3: "burchak",
     },
 
-    "confidence_threshold":   0.45,
+    "confidence_threshold":   0.50,
     "alert_cooldown_seconds": 30,
-    "frame_delay_ms":         60,
+    "frame_delay_ms":         30,
 
     "save_alert_images": True,
     "save_folder":       "alerts",
