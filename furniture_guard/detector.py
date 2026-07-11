@@ -238,6 +238,7 @@ class FurnitureGuard:
         log.info("🔄 Model yuklanmoqda...")
         if YOLO_AVAILABLE:
             self.model = YOLO("mebel_model.pt")
+            self.model.to("cpu")
             log.info(f"✅ Model yuklandi: {list(self.model.names.values())}")
         else:
             self.model = None
