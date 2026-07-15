@@ -30,8 +30,11 @@ except ImportError:
 CONFIG = {
     "camera_source": 'rtsp://admin:1FaSa1988@192.168.8.5:554/Streaming/Channels/101',
 
-    "telegram_token":   "8794822676:AAFWS7qDJ1Kj4QbqESxSE60hJhcSJ5EPWKc",
-    "telegram_chat_id": "112678336",
+    "telegram_token": "8794822676:AAFWS7qDJ1Kj4QbqESxSE60hJhcSJ5EPWKc",
+    "telegram_chat_ids": [
+        "112678336",
+        "8441789662"
+    ],
 
     "exit_zone": (8, 485, 1125, 1438),
 
@@ -125,9 +128,9 @@ class OfflineQueue:
 #  TELEGRAM
 # ══════════════════════════════════════════════
 class TelegramAlert:
-    def __init__(self, token: str, chat_id: str, queue: OfflineQueue, retry_sec: int):
+    def __init__(self, token: str, chat_ids: list, queue: OfflineQueue, retry_sec: int):
         self.token    = token
-        self.chat_id  = chat_id
+        self.chat_ids = chat_ids
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.queue    = queue
         self._last_alerts: dict[int, float] = {}
@@ -141,23 +144,29 @@ class TelegramAlert:
         except Exception:
             return False
 
-    def _send_photo_now(self, img_bytes: bytes, caption: str) -> bool:
+    def _send_photo_to_one(self, chat_id: str, img_bytes: bytes, caption: str) -> bool:
         try:
             resp = requests.post(
                 f"{self.base_url}/sendPhoto",
-                data={"chat_id": self.chat_id, "caption": caption, "parse_mode": "HTML"},
+                data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
                 files={"photo": ("alert.jpg", img_bytes, "image/jpeg")},
                 timeout=15
             )
             if resp.status_code == 200:
-                log.info("✅ Telegram xabari yuborildi")
+                log.info(f"✅ Telegram xabari yuborildi ({chat_id})")
                 return True
             else:
-                log.warning(f"❌ Telegram xato: {resp.text[:100]}")
+                log.warning(f"❌ Telegram xato ({chat_id}): {resp.text[:100]}")
                 return False
         except Exception as e:
-            log.warning(f"❌ Telegram ulanish xatosi: {e}")
+            log.warning(f"❌ Telegram ulanish xatosi ({chat_id}): {e}")
             return False
+
+    def _send_photo_now(self, img_bytes: bytes, caption: str) -> bool:
+        # Hech bo'lmasa bittasiga yuborilsa muvaffaqiyatli deb hisoblanadi,
+        # lekin har bir chat uchun alohida urinib ko'radi
+        results = [self._send_photo_to_one(cid, img_bytes, caption) for cid in self.chat_ids]
+        return all(results)
 
     def _retry_loop(self, retry_sec: int):
         while True:
@@ -194,14 +203,15 @@ class TelegramAlert:
         self.queue.push(img_bytes, caption)
 
     def send_text(self, message: str):
-        try:
-            requests.post(
-                f"{self.base_url}/sendMessage",
-                data={"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"},
-                timeout=10
-            )
-        except Exception as e:
-            log.warning(f"send_text xato: {e}")
+        for chat_id in self.chat_ids:
+            try:
+                requests.post(
+                    f"{self.base_url}/sendMessage",
+                    data={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
+                    timeout=10
+                )
+            except Exception as e:
+                log.warning(f"send_text xato ({chat_id}): {e}")
 
 
 # ══════════════════════════════════════════════
@@ -229,7 +239,7 @@ class FurnitureGuard:
         self.cfg = config
         self.queue = OfflineQueue(config["offline_queue_dir"], config["offline_max_count"])
         self.telegram = TelegramAlert(
-            config["telegram_token"], config["telegram_chat_id"],
+            config["telegram_token"], config["telegram_chat_ids"],
             self.queue, config["offline_retry_sec"]
         )
         self.alert_log: list[dict] = []
