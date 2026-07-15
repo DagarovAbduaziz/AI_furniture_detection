@@ -55,7 +55,7 @@ CONFIG = {
     "offline_retry_sec": 60,
 
     "log_file":    "detector.log",
-    "show_window": True,   # serverda False qiling
+    "show_window": False,   # serverda False qiling
 }
 
 
