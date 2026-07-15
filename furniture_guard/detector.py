@@ -31,7 +31,7 @@ CONFIG = {
     "camera_source": 'rtsp://admin:1FaSa1988@192.168.8.5:554/Streaming/Channels/101',
 
     "telegram_token":   "8794822676:AAFWS7qDJ1Kj4QbqESxSE60hJhcSJ5EPWKc",
-    "telegram_chat_id": "8441789662",
+    "telegram_chat_id": "112678336",
 
     "exit_zone": (8, 485, 1125, 1438),
 
@@ -55,7 +55,7 @@ CONFIG = {
     "offline_retry_sec": 60,
 
     "log_file":    "detector.log",
-    "show_window": False,   # serverda False qiling
+    "show_window": True,   # serverda False qiling
 }
 
 

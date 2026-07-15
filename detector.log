@@ -4,3 +4,12 @@
 2026-07-11 18:54:36,331 [INFO] 🎥 Kamera: 2560x1440 @ 20FPS
 2026-07-11 18:54:36,332 [INFO] 🚪 Chiqish zonasi: (8, 485, 1125, 1438)
 2026-07-11 18:54:37,214 [INFO] ▶  Kuzatish boshlandi
+2026-07-11 18:58:32,042 [INFO] 🔄 Model yuklanmoqda...
+2026-07-11 18:58:55,922 [INFO] 🔄 Model yuklanmoqda...
+2026-07-11 18:58:55,971 [INFO] ✅ Model yuklandi: ['divan', 'kreslo', 'pufik', 'burchak']
+2026-07-11 18:58:55,971 [INFO] 🔄 Kameraga ulanmoqda: rtsp://admin:1FaSa1988@192.168.8.5:554/Streaming/Channels/101
+2026-07-11 18:58:57,294 [INFO] 🎥 Kamera: 2560x1440 @ 20FPS
+2026-07-11 18:58:57,294 [INFO] 🚪 Chiqish zonasi: (8, 485, 1125, 1438)
+2026-07-11 18:58:57,916 [INFO] ▶  Kuzatish boshlandi
+2026-07-11 19:00:15,822 [WARNING] ⚠️  Qayta ulanmoqda...
+2026-07-11 19:00:19,190 [INFO] ✅ Kamera qayta ulandi
