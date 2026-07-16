@@ -32,7 +32,7 @@ CONFIG = {
 
     "telegram_token": "8794822676:AAFWS7qDJ1Kj4QbqESxSE60hJhcSJ5EPWKc",
     "telegram_chat_ids": [
-        "112678336",
+        # "112678336",
         "8441789662"
     ],
 
@@ -316,7 +316,7 @@ class FurnitureGuard:
             if not self.telegram.can_send_alert(det["class_id"], self.cfg["alert_cooldown_seconds"]):
                 continue
             now    = datetime.now()
-            ts_str = now.strftime("%Y-%m-%d %H:%M:%S")
+            ts_str = now.strftime("%Y-%m-%d")
             caption = (
                 f"🚨 <b>MEBEL SEXI OGOHLANTIRISH!</b>\n\n"
                 f"📦 Mebel: <b>{det['label']}</b>\n"
