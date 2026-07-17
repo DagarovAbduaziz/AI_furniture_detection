@@ -32,7 +32,7 @@ CONFIG = {
 
     "telegram_token": "8794822676:AAFWS7qDJ1Kj4QbqESxSE60hJhcSJ5EPWKc",
     "telegram_chat_ids": [
-        # "112678336",
+        "112678336",
         "8441789662"
     ],
 
@@ -41,13 +41,14 @@ CONFIG = {
     "furniture_classes": {
         0: "divan",
         1: "kreslo",
-        2: "pufik",
-        3: "burchak",
+        2: "pufik"
+        # 3: "odam",
+        # 4: "mashina",
     },
 
-    "confidence_threshold":   0.50,
-    "alert_cooldown_seconds": 30,
-    "frame_delay_ms":         30,
+    "confidence_threshold":   0.60,
+    "alert_cooldown_seconds": 40,
+    "frame_delay_ms": 1,
 
     "save_alert_images": True,
     "save_folder":       "alerts",
@@ -247,7 +248,7 @@ class FurnitureGuard:
 
         log.info("🔄 Model yuklanmoqda...")
         if YOLO_AVAILABLE:
-            self.model = YOLO("mebel_model.pt")
+            self.model = YOLO("detection.pt")
             self.model.to("cpu")
             log.info(f"✅ Model yuklandi: {list(self.model.names.values())}")
         else:
@@ -366,7 +367,7 @@ class FurnitureGuard:
         fps_history       = deque(maxlen=30)
         t_prev            = time.time()
         consecutive_fails = 0
-        MAX_FAILS         = 5
+        MAX_FAILS         = 2
 
         log.info(f"🔄 Kameraga ulanmoqda: {src}")
         cap, frame = self._open_camera(src)
@@ -386,11 +387,11 @@ class FurnitureGuard:
 
         log.info(f"🎥 Kamera: {w}x{h} @ {fps:.0f}FPS")
         log.info(f"🚪 Chiqish zonasi: {self.cfg['exit_zone']}")
-        self.telegram.send_text(
-            "🟢 <b>Mebel nazorat tizimi ishga tushdi</b>\n"
-            f"Kamera: {w}x{h}\n"
-            f"Vaqt: {datetime.now().strftime('%H:%M:%S')}"
-        )
+        # self.telegram.send_text(
+        #     "🟢 <b>Mebel nazorat tizimi ishga tushdi</b>\n"
+        #     f"Kamera: {w}x{h}\n"
+        #     f"Vaqt: {datetime.now().strftime('%H:%M:%S')}"
+        # )
         log.info("▶  Kuzatish boshlandi")
 
         while True:
