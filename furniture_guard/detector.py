@@ -32,7 +32,7 @@ CONFIG = {
 
     "telegram_token": "8794822676:AAFWS7qDJ1Kj4QbqESxSE60hJhcSJ5EPWKc",
     "telegram_chat_ids": [
-        # "112678336",
+        "112678336",
         "8441789662"
     ],
 
