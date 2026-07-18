@@ -87,7 +87,7 @@ class OfflineQueue:
         self.max_count = max_count
         self._lock = threading.Lock()
 
-    def push(self, img_bytes: bytes, caption: str):
+    def push(self, img_bytes: bytes, caption: str, chat_ids: list):
         with self._lock:
             existing = sorted(self.dir.glob("*.jpg"))
             while len(existing) >= self.max_count:
@@ -97,7 +97,8 @@ class OfflineQueue:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             self.dir.joinpath(f"{ts}.jpg").write_bytes(img_bytes)
             self.dir.joinpath(f"{ts}.json").write_text(
-                json.dumps({"caption": caption}, ensure_ascii=False), encoding="utf-8"
+                json.dumps({"caption": caption, "chat_ids": chat_ids}, ensure_ascii=False),
+                encoding="utf-8"
             )
             log.info(f"📥 Offline saqlandi ({self.count()} ta navbatda)")
 
@@ -111,10 +112,19 @@ class OfflineQueue:
                 try:
                     img_bytes = img_path.read_bytes()
                     meta      = json.loads(meta_path.read_text(encoding="utf-8"))
-                    result.append((img_bytes, meta.get("caption", ""), img_path))
+                    result.append((img_bytes, meta.get("caption", ""), meta.get("chat_ids", []), img_path))
                 except Exception:
                     pass
             return result
+
+    def update_chat_ids(self, img_path: Path, chat_ids: list, caption: str):
+        """Faqat hali yetib bormagan chat_id'larni qoldirib, json'ni yangilaydi"""
+        with self._lock:
+            meta_path = img_path.with_suffix(".json")
+            meta_path.write_text(
+                json.dumps({"caption": caption, "chat_ids": chat_ids}, ensure_ascii=False),
+                encoding="utf-8"
+            )
 
     def remove(self, img_path: Path):
         with self._lock:
@@ -123,7 +133,6 @@ class OfflineQueue:
 
     def count(self) -> int:
         return len(list(self.dir.glob("*.jpg")))
-
 
 # ══════════════════════════════════════════════
 #  TELEGRAM
@@ -163,12 +172,6 @@ class TelegramAlert:
             log.warning(f"❌ Telegram ulanish xatosi ({chat_id}): {e}")
             return False
 
-    def _send_photo_now(self, img_bytes: bytes, caption: str) -> bool:
-        # Hech bo'lmasa bittasiga yuborilsa muvaffaqiyatli deb hisoblanadi,
-        # lekin har bir chat uchun alohida urinib ko'radi
-        results = [self._send_photo_to_one(cid, img_bytes, caption) for cid in self.chat_ids]
-        return all(results)
-
     def _retry_loop(self, retry_sec: int):
         while True:
             time.sleep(retry_sec)
@@ -179,13 +182,19 @@ class TelegramAlert:
                 log.info(f"📵 Internet yo'q — {len(pending)} ta rasm kutmoqda")
                 continue
             log.info(f"🌐 {len(pending)} ta navbatdagi rasm yuborilmoqda...")
-            for img_bytes, caption, img_path in pending:
-                caption += "\n⏰ <i>Kechikib yuborildi</i>"
-                if self._send_photo_now(img_bytes, caption):
-                    self.queue.remove(img_path)
-                    time.sleep(1)
+            for img_bytes, caption, chat_ids, img_path in pending:
+                retry_caption = caption + "\n⏰ <i>Kechikib yuborildi</i>"
+                still_failed = []
+                for cid in chat_ids:
+                    if self._send_photo_to_one(cid, img_bytes, retry_caption):
+                        time.sleep(1)
+                    else:
+                        still_failed.append(cid)
+                if still_failed:
+                    # faqat hali yetmaganlar uchun navbatda qoladi
+                    self.queue.update_chat_ids(img_path, still_failed, caption)
                 else:
-                    break
+                    self.queue.remove(img_path)
 
     def can_send_alert(self, object_id: int, cooldown: int) -> bool:
         with self._lock:
@@ -197,11 +206,18 @@ class TelegramAlert:
             return False
 
     def send_photo_alert(self, img_bytes: bytes, caption: str):
-        if self._internet_ok():
-            if self._send_photo_now(img_bytes, caption):
-                return
-        log.info("📵 Internet yo'q — navbatga qo'shildi")
-        self.queue.push(img_bytes, caption)
+        internet = self._internet_ok()
+        failed_ids = []
+        if internet:
+            for cid in self.chat_ids:
+                if not self._send_photo_to_one(cid, img_bytes, caption):
+                    failed_ids.append(cid)
+        else:
+            failed_ids = list(self.chat_ids)
+
+        if failed_ids:
+            log.info(f"📵 {len(failed_ids)} ta chatga yetmadi — navbatga qo'shildi")
+            self.queue.push(img_bytes, caption, failed_ids)
 
     def send_text(self, message: str):
         for chat_id in self.chat_ids:
