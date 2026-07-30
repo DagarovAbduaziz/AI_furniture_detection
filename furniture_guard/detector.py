@@ -1,13 +1,14 @@
 """
 Mebel Sexi Chiqish Nazorat Tizimi
 ===================================
-✅ Internet yo'qda rasmlarni saqlaydi, kelganda yuboradi
 ✅ Barcha xatolar detector.log ga yoziladi
 ✅ Serverda ekransiz ishlaydi (show_window = False)
+✅ 2-3 kishiga bir vaqtda Telegram orqali ogohlantirish yuboradi
+   (offline-navbat yo'q — internet bo'lmasa alert shunchaki
+   logga yozib qo'yiladi va o'tkazib yuboriladi)
 """
 
 import cv2
-import json
 import time
 import requests
 import threading
@@ -32,6 +33,7 @@ CONFIG = {
 
     "telegram_token": "8794822676:AAFWS7qDJ1Kj4QbqESxSE60hJhcSJ5EPWKc",
     "telegram_chat_ids": [
+        "112678336",
         "8441789662"
     ],
 
@@ -45,17 +47,12 @@ CONFIG = {
         # 4: "mashina",
     },
 
-    "confidence_threshold":   0.75,
+    "confidence_threshold":   0.77,
     "alert_cooldown_seconds": 40,
     "frame_delay_ms": 1,
 
     "save_alert_images": True,
     "save_folder":       "alerts",
-
-    # Offline navbat
-    "offline_queue_dir": "offline_queue",
-    "offline_max_count": 200,
-    "offline_retry_sec": 60,
 
     "log_file":    "detector.log",
     "show_window": False,   # serverda False qiling
@@ -77,81 +74,15 @@ log = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════
-#  OFFLINE NAVBAT
-# ══════════════════════════════════════════════
-class OfflineQueue:
-    def __init__(self, folder: str, max_count: int):
-        self.dir = Path(folder)
-        self.dir.mkdir(exist_ok=True)
-        self.max_count = max_count
-        self._lock = threading.Lock()
-
-    def push(self, img_bytes: bytes, caption: str, chat_ids: list):
-        with self._lock:
-            existing = sorted(self.dir.glob("*.jpg"))
-            while len(existing) >= self.max_count:
-                old = existing.pop(0)
-                old.unlink(missing_ok=True)
-                old.with_suffix(".json").unlink(missing_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            self.dir.joinpath(f"{ts}.jpg").write_bytes(img_bytes)
-            self.dir.joinpath(f"{ts}.json").write_text(
-                json.dumps({"caption": caption, "chat_ids": chat_ids}, ensure_ascii=False),
-                encoding="utf-8"
-            )
-            log.info(f"📥 Offline saqlandi ({self.count()} ta navbatda)")
-
-    def pop_all(self):
-        with self._lock:
-            result = []
-            for img_path in sorted(self.dir.glob("*.jpg")):
-                meta_path = img_path.with_suffix(".json")
-                if not meta_path.exists():
-                    continue
-                try:
-                    img_bytes = img_path.read_bytes()
-                    meta      = json.loads(meta_path.read_text(encoding="utf-8"))
-                    result.append((img_bytes, meta.get("caption", ""), meta.get("chat_ids", []), img_path))
-                except Exception:
-                    pass
-            return result
-
-    def update_chat_ids(self, img_path: Path, chat_ids: list, caption: str):
-        """Faqat hali yetib bormagan chat_id'larni qoldirib, json'ni yangilaydi"""
-        with self._lock:
-            meta_path = img_path.with_suffix(".json")
-            meta_path.write_text(
-                json.dumps({"caption": caption, "chat_ids": chat_ids}, ensure_ascii=False),
-                encoding="utf-8"
-            )
-
-    def remove(self, img_path: Path):
-        with self._lock:
-            img_path.unlink(missing_ok=True)
-            img_path.with_suffix(".json").unlink(missing_ok=True)
-
-    def count(self) -> int:
-        return len(list(self.dir.glob("*.jpg")))
-
-# ══════════════════════════════════════════════
 #  TELEGRAM
 # ══════════════════════════════════════════════
 class TelegramAlert:
-    def __init__(self, token: str, chat_ids: list, queue: OfflineQueue, retry_sec: int):
+    def __init__(self, token: str, chat_ids: list):
         self.token    = token
         self.chat_ids = chat_ids
         self.base_url = f"https://api.telegram.org/bot{token}"
-        self.queue    = queue
         self._last_alerts: dict[int, float] = {}
         self._lock = threading.Lock()
-        threading.Thread(target=self._retry_loop, args=(retry_sec,), daemon=True).start()
-
-    def _internet_ok(self) -> bool:
-        try:
-            requests.get("https://api.telegram.org", timeout=5)
-            return True
-        except Exception:
-            return False
 
     def _send_photo_to_one(self, chat_id: str, img_bytes: bytes, caption: str) -> bool:
         try:
@@ -171,30 +102,6 @@ class TelegramAlert:
             log.warning(f"❌ Telegram ulanish xatosi ({chat_id}): {e}")
             return False
 
-    def _retry_loop(self, retry_sec: int):
-        while True:
-            time.sleep(retry_sec)
-            pending = self.queue.pop_all()
-            if not pending:
-                continue
-            if not self._internet_ok():
-                log.info(f"📵 Internet yo'q — {len(pending)} ta rasm kutmoqda")
-                continue
-            log.info(f"🌐 {len(pending)} ta navbatdagi rasm yuborilmoqda...")
-            for img_bytes, caption, chat_ids, img_path in pending:
-                retry_caption = caption + "\n⏰ <i>Kechikib yuborildi</i>"
-                still_failed = []
-                for cid in chat_ids:
-                    if self._send_photo_to_one(cid, img_bytes, retry_caption):
-                        time.sleep(1)
-                    else:
-                        still_failed.append(cid)
-                if still_failed:
-                    # faqat hali yetmaganlar uchun navbatda qoladi
-                    self.queue.update_chat_ids(img_path, still_failed, caption)
-                else:
-                    self.queue.remove(img_path)
-
     def can_send_alert(self, object_id: int, cooldown: int) -> bool:
         with self._lock:
             now  = time.time()
@@ -205,18 +112,10 @@ class TelegramAlert:
             return False
 
     def send_photo_alert(self, img_bytes: bytes, caption: str):
-        internet = self._internet_ok()
-        failed_ids = []
-        if internet:
-            for cid in self.chat_ids:
-                if not self._send_photo_to_one(cid, img_bytes, caption):
-                    failed_ids.append(cid)
-        else:
-            failed_ids = list(self.chat_ids)
-
-        if failed_ids:
-            log.info(f"📵 {len(failed_ids)} ta chatga yetmadi — navbatga qo'shildi")
-            self.queue.push(img_bytes, caption, failed_ids)
+        """Har bir chat_id ga alohida yuboradi. Muvaffaqiyatsiz bo'lganlar
+        shunchaki logga yoziladi — qayta urinilmaydi va saqlanmaydi."""
+        for cid in self.chat_ids:
+            self._send_photo_to_one(cid, img_bytes, caption)
 
     def send_text(self, message: str):
         for chat_id in self.chat_ids:
@@ -253,11 +152,7 @@ def box_in_exit_zone(box_xyxy, zone_xyxy, overlap_threshold=0.3) -> bool:
 class FurnitureGuard:
     def __init__(self, config: dict):
         self.cfg = config
-        self.queue = OfflineQueue(config["offline_queue_dir"], config["offline_max_count"])
-        self.telegram = TelegramAlert(
-            config["telegram_token"], config["telegram_chat_ids"],
-            self.queue, config["offline_retry_sec"]
-        )
+        self.telegram = TelegramAlert(config["telegram_token"], config["telegram_chat_ids"])
         self.alert_log: list[dict] = []
         Path(config["save_folder"]).mkdir(exist_ok=True)
 
@@ -290,10 +185,6 @@ class FurnitureGuard:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
         ts = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
         cv2.putText(frame, ts, (10, h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-        pending = self.queue.count()
-        status  = f"📵 OFFLINE ({pending} navbatda)" if pending > 0 else "🌐 ONLINE"
-        s_color = (0, 100, 255) if pending > 0 else (0, 200, 80)
-        cv2.putText(frame, status, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, s_color, 1)
         cv2.putText(frame, f"Topilgan mebel: {len(detections)}", (10, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
         return frame
