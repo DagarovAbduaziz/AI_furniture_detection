@@ -47,7 +47,7 @@ CONFIG = {
         # 4: "mashina",
     },
 
-    "confidence_threshold":   0.90,
+    "confidence_threshold":   0.76,
     "alert_cooldown_seconds": 100,
     "frame_delay_ms": 1,
 
