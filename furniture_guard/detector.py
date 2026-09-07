@@ -226,7 +226,6 @@ class FurnitureGuard:
             ts_str = now.strftime("%Y-%m-%d")
             caption = (
                 f"🚨 <b>MEBEL SEXI OGOHLANTIRISH!</b>\n\n"
-                f"📦 Mebel: <b>{det['label']}</b>\n"
                 f"📊 Ishonch darajasi: {det['confidence']:.0%}\n"
                 f"📍 Joyi: Chiqish zonasi\n"
                 f"🕐 Vaqt: {ts_str}"
@@ -293,11 +292,11 @@ class FurnitureGuard:
 
         log.info(f"🎥 Kamera: {w}x{h} @ {fps:.0f}FPS")
         log.info(f"🚪 Chiqish zonasi: {self.cfg['exit_zone']}")
-        # self.telegram.send_text(
-        #     "🟢 <b>Mebel nazorat tizimi ishga tushdi</b>\n"
-        #     f"Kamera: {w}x{h}\n"
-        #     f"Vaqt: {datetime.now().strftime('%H:%M:%S')}"
-        # )
+        self.telegram.send_text(
+            "🟢 <b>Mebel nazorat tizimi ishga tushdi</b>\n"
+            f"Kamera: {w}x{h}\n"
+            f"Vaqt: {datetime.now().strftime('%H:%M:%S')}"
+        )
         log.info("▶  Kuzatish boshlandi")
 
         while True:
